@@ -33,7 +33,7 @@ func View(model Model, screen *Screen) {
 	editorW, explorerW, contentH := layoutSizes(model.Width, model.Height)
 
 	// Editor panel (left)
-	renderEditor(screen, model.Editor, 0, 0, editorW, contentH, model.Focus == EditorPanel)
+	renderEditor(screen, model.Editor, 0, 0, editorW, contentH, model.Focus == EditorPanel, model.SearchMode, model.SearchQuery)
 
 	// Vertical divider
 	dividerX := editorW
@@ -49,7 +49,7 @@ func View(model Model, screen *Screen) {
 	renderStatusBar(screen, model, model.Height-1)
 }
 
-func renderEditor(screen *Screen, editor EditorModel, x0, y0, width, height int, focused bool) {
+func renderEditor(screen *Screen, editor EditorModel, x0, y0, width, height int, focused bool, searchMode bool, searchQuery string) {
 	if width <= gutterWidth || height <= 0 {
 		return
 	}
@@ -57,7 +57,6 @@ func renderEditor(screen *Screen, editor EditorModel, x0, y0, width, height int,
 	textWidth := width - gutterWidth
 
 	gutterStyle := Style{FG: ColorYellow}
-	textStyle := DefaultStyle
 
 	for row := 0; row < height; row++ {
 		lineIdx := editor.ScrollY + row
@@ -71,12 +70,23 @@ func renderEditor(screen *Screen, editor EditorModel, x0, y0, width, height int,
 		numStr := fmt.Sprintf("%*d", lineNumDigits, lineIdx+1)
 		screen.SetString(x0, y0+row, numStr, gutterStyle)
 
-		// Text content
+		// Text content with syntax highlighting
 		line := []rune(editor.Lines[lineIdx])
+		hlStyles := Highlight(editor.Lang, editor.Lines[lineIdx])
+
+		// Overlay search match highlight on the current match
+		if searchMode && searchQuery != "" && lineIdx == editor.CursorY {
+			matchStyle := Style{FG: ColorBlack, BG: ColorYellow}
+			matchRunes := []rune(searchQuery)
+			for mi := 0; mi < len(matchRunes) && editor.CursorX+mi < len(hlStyles); mi++ {
+				hlStyles[editor.CursorX+mi] = matchStyle
+			}
+		}
+
 		for col := 0; col < textWidth; col++ {
 			charIdx := editor.ScrollX + col
 			if charIdx < len(line) {
-				screen.Set(textX0+col, y0+row, line[charIdx], textStyle)
+				screen.Set(textX0+col, y0+row, line[charIdx], hlStyles[charIdx])
 			}
 		}
 	}

@@ -42,14 +42,18 @@ type ErrorMsg struct{ Err error }
 
 // Model is the complete application state
 type Model struct {
-	Editor   EditorModel
-	Explorer ExplorerModel
-	Focus    Panel
-	Width    int
-	Height   int
-	Quit     bool
-	Status   string
-	Prefix   Key // for multi-key sequences (e.g., C-x)
+	Editor        EditorModel
+	Explorer      ExplorerModel
+	Focus         Panel
+	Width         int
+	Height        int
+	Quit          bool
+	Status        string
+	Prefix        Key // for multi-key sequences (e.g., C-x)
+	SearchMode    bool
+	SearchQuery   string
+	SearchOriginY int
+	SearchOriginX int
 }
 
 // InitModel creates the initial application state
@@ -85,6 +89,7 @@ func Update(model Model, msg Msg) (Model, Cmd) {
 		model.Editor = EditorModel{
 			Lines:    lines,
 			Filename: msg.Filename,
+			Lang:     DetectLanguage(msg.Filename),
 		}
 		model.Focus = EditorPanel
 		model.Status = fmt.Sprintf("Opened %s", filepath.Base(msg.Filename))
@@ -98,6 +103,11 @@ func Update(model Model, msg Msg) (Model, Cmd) {
 }
 
 func updateKey(model Model, key KeyEvent) (Model, Cmd) {
+	// Search mode captures all input
+	if model.SearchMode {
+		return updateSearch(model, key)
+	}
+
 	// Handle C-x prefix sequence
 	if model.Prefix == KeyCtrlX {
 		model.Prefix = KeyNone
@@ -149,6 +159,9 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 	// Dispatch to focused panel
 	switch model.Focus {
 	case EditorPanel:
+		if key.Key == KeyCtrlS {
+			return enterSearch(model), nil
+		}
 		return updateEditor(model, key), nil
 	case ExplorerPanel:
 		return updateExplorer(model, key)
@@ -197,6 +210,104 @@ func updateEditor(model Model, key KeyEvent) Model {
 	e = e.ScrollToView(contentH, textWidth)
 	model.Editor = e
 	return model
+}
+
+// enterSearch activates incremental search mode
+func enterSearch(model Model) Model {
+	model.SearchMode = true
+	model.SearchQuery = ""
+	model.SearchOriginY = model.Editor.CursorY
+	model.SearchOriginX = model.Editor.CursorX
+	model.Status = "I-search: "
+	return model
+}
+
+// updateSearch handles keypresses while incremental search is active
+func updateSearch(model Model, key KeyEvent) (Model, Cmd) {
+	switch key.Key {
+	case KeyEscape, KeyCtrlG:
+		// Cancel: restore cursor to where search began
+		model.SearchMode = false
+		model.Editor.CursorY = model.SearchOriginY
+		model.Editor.CursorX = model.SearchOriginX
+		model.SearchQuery = ""
+		_, _, contentH := layoutSizes(model.Width, model.Height)
+		editorW, _, _ := layoutSizes(model.Width, model.Height)
+		model.Editor = model.Editor.ScrollToView(contentH, editorW-gutterWidth)
+		model.Status = "Search cancelled"
+		return model, nil
+	case KeyEnter:
+		// Confirm: keep cursor at matched position
+		model.SearchMode = false
+		if model.SearchQuery == "" {
+			model.Status = ""
+		} else {
+			model.Status = fmt.Sprintf("Search: %s", model.SearchQuery)
+		}
+		model.SearchQuery = ""
+		return model, nil
+	case KeyCtrlS:
+		// Advance to next match
+		model = searchFrom(model, model.Editor.CursorY, model.Editor.CursorX+1)
+		return model, nil
+	case KeyBackspace:
+		q := []rune(model.SearchQuery)
+		if len(q) > 0 {
+			model.SearchQuery = string(q[:len(q)-1])
+		}
+		model = searchFrom(model, model.SearchOriginY, model.SearchOriginX)
+		return model, nil
+	case KeyRune:
+		model.SearchQuery += string(key.Char)
+		model = searchFrom(model, model.SearchOriginY, model.SearchOriginX)
+		return model, nil
+	}
+	return model, nil
+}
+
+// searchFrom scans forward from (startY, startX), wrapping around the buffer.
+// It moves the editor cursor to the first match and updates the status line.
+func searchFrom(model Model, startY, startX int) Model {
+	q := []rune(model.SearchQuery)
+	if len(q) == 0 {
+		model.Editor.CursorY = model.SearchOriginY
+		model.Editor.CursorX = model.SearchOriginX
+		model.Status = "I-search: "
+		return model
+	}
+	nLines := len(model.Editor.Lines)
+	for dy := 0; dy < nLines; dy++ {
+		lineIdx := (startY + dy) % nLines
+		line := []rune(model.Editor.Lines[lineIdx])
+		startCol := 0
+		if dy == 0 {
+			startCol = startX
+			if startCol < 0 {
+				startCol = 0
+			}
+		}
+		for col := startCol; col+len(q) <= len(line); col++ {
+			if runesMatch(line[col:col+len(q)], q) {
+				model.Editor.CursorY = lineIdx
+				model.Editor.CursorX = col
+				editorW, _, contentH := layoutSizes(model.Width, model.Height)
+				model.Editor = model.Editor.ScrollToView(contentH, editorW-gutterWidth)
+				model.Status = fmt.Sprintf("I-search: %s", model.SearchQuery)
+				return model
+			}
+		}
+	}
+	model.Status = fmt.Sprintf("I-search: %s [not found]", model.SearchQuery)
+	return model
+}
+
+func runesMatch(a, b []rune) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func updateExplorer(model Model, key KeyEvent) (Model, Cmd) {

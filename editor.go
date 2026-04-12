@@ -11,6 +11,7 @@ type EditorModel struct {
 	ScrollX  int // first visible column
 	Filename string
 	Modified bool
+	Lang     Language // syntax highlighting language
 }
 
 // NewEditorModel creates an empty editor buffer
