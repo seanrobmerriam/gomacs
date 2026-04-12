@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 )
 
 func main() {
@@ -27,6 +29,11 @@ func main() {
 	enterAltScreen(os.Stdout)
 	defer exitAltScreen(os.Stdout)
 	defer fmt.Fprint(os.Stdout, "\x1b[?25h") // ensure cursor is visible on exit
+
+	// Listen for terminal resize signals
+	sigwinchCh := make(chan os.Signal, 1)
+	signal.Notify(sigwinchCh, syscall.SIGWINCH)
+	defer signal.Stop(sigwinchCh)
 
 	// Get terminal dimensions
 	width, height, err := getTerminalSize(fd)
@@ -90,13 +97,17 @@ func main() {
 			model, cmd = Update(model, msg)
 		}
 
-		// Check for terminal resize
-		if newW, newH, err := getTerminalSize(fd); err == nil {
-			if newW != model.Width || newH != model.Height {
-				model.Width = newW
-				model.Height = newH
-				prevScreen = nil // force full redraw
+		// Check for terminal resize (non-blocking — triggered by SIGWINCH)
+		select {
+		case <-sigwinchCh:
+			if newW, newH, err := getTerminalSize(fd); err == nil {
+				if newW != model.Width || newH != model.Height {
+					model.Width = newW
+					model.Height = newH
+					prevScreen = nil // force full redraw
+				}
 			}
+		default:
 		}
 	}
 }
