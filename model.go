@@ -274,6 +274,10 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 			model.Focus = ExplorerPanel
 			model.Status = "Select a file and press Enter"
 			return model, nil
+		case KeyEnter:
+			// In terminals, C-m is typically reported as Enter.
+			model = formatActiveGoBuffer(model)
+			return model, nil
 		case KeyRune:
 			switch key.Char {
 			case 'b':
@@ -313,43 +317,7 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 				}
 				return model, nil
 			case 'm':
-				e := model.Buffers[model.BufIdx]
-				if e.Lang != LangGo {
-					model.Status = "Format: only Go is supported"
-					return model, nil
-				}
-
-				content := strings.Join(e.Lines, "\n")
-				formatted, ok := formatGoSource(content)
-				if !ok {
-					model.Status = "Format failed"
-					return model, nil
-				}
-				if formatted == content {
-					model.Status = "Already formatted"
-					return model, nil
-				}
-
-				e = e.pushUndo()
-				e.Lines = strings.Split(formatted, "\n")
-				if len(e.Lines) == 0 {
-					e.Lines = []string{""}
-				}
-				if e.CursorY >= len(e.Lines) {
-					e.CursorY = len(e.Lines) - 1
-				}
-				if e.CursorY < 0 {
-					e.CursorY = 0
-				}
-				lineLen := len([]rune(e.Lines[e.CursorY]))
-				if e.CursorX > lineLen {
-					e.CursorX = lineLen
-				}
-				editorW, _, contentH := layoutSizes(model.Width, model.Height)
-				e = e.ScrollToView(contentH, editorW-gutterWidth)
-				e.Modified = true
-				model.Buffers[model.BufIdx] = e
-				model.Status = "Formatted Go buffer"
+				model = formatActiveGoBuffer(model)
 				return model, nil
 			}
 			model.Status = "C-x: unknown key"
@@ -565,6 +533,47 @@ func hasFormattingHints(content string) bool {
 		}
 	}
 	return false
+}
+
+func formatActiveGoBuffer(model Model) Model {
+	e := model.Buffers[model.BufIdx]
+	if e.Lang != LangGo {
+		model.Status = "Format: only Go is supported"
+		return model
+	}
+
+	content := strings.Join(e.Lines, "\n")
+	formatted, ok := formatGoSource(content)
+	if !ok {
+		model.Status = "Format failed"
+		return model
+	}
+	if formatted == content {
+		model.Status = "Already formatted"
+		return model
+	}
+
+	e = e.pushUndo()
+	e.Lines = strings.Split(formatted, "\n")
+	if len(e.Lines) == 0 {
+		e.Lines = []string{""}
+	}
+	if e.CursorY >= len(e.Lines) {
+		e.CursorY = len(e.Lines) - 1
+	}
+	if e.CursorY < 0 {
+		e.CursorY = 0
+	}
+	lineLen := len([]rune(e.Lines[e.CursorY]))
+	if e.CursorX > lineLen {
+		e.CursorX = lineLen
+	}
+	editorW, _, contentH := layoutSizes(model.Width, model.Height)
+	e = e.ScrollToView(contentH, editorW-gutterWidth)
+	e.Modified = true
+	model.Buffers[model.BufIdx] = e
+	model.Status = "Formatted Go buffer"
+	return model
 }
 
 func formatGoSource(content string) (string, bool) {

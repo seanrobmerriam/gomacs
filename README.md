@@ -16,6 +16,7 @@ Runs on Linux, macOS, and FreeBSD.
 - **Mouse support** — click to position cursor, click explorer entries to open/toggle, scroll wheel to scroll
 - **Status line polish** — shows current language and line ending (`LF`/`CRLF`)
 - **Go formatting on open** — if a Go file appears unformatted, gomacs applies gofmt-style formatting in memory when opening
+- **Manual Go formatting** — `C-x C-m` formats the active Go buffer on demand
 - **Double-buffered rendering** — diff-based ANSI updates, no flicker
 - **Live terminal resize** — `SIGWINCH` signal handling, redraws immediately
 - **Raw terminal** — via `syscall` + `ioctl`, no external libraries
@@ -30,7 +31,7 @@ Runs on Linux, macOS, and FreeBSD.
 | `C-x C-c` | Quit |
 | `C-x C-s` | Save current file |
 | `C-x C-f` | Switch to file explorer (then Enter to open) |
-| `C-x C-m` | Format current Go buffer |
+| `C-x C-m` (or `C-x Enter`) | Format current Go buffer |
 | `C-x b` | Cycle to next open buffer |
 | `C-x k` | Kill (close) current buffer |
 
@@ -69,6 +70,13 @@ Runs on Linux, macOS, and FreeBSD.
 | Left click directory entry in explorer | Toggle expand/collapse |
 | Wheel up/down | Scroll focused panel |
 
+### Formatting
+
+- Go files may be auto-formatted in memory on open when the buffer appears unformatted.
+- Use `C-x C-m` to manually format the active Go buffer at any time.
+- In many terminals, `C-m` is encoded as `Enter`, so `C-x Enter` triggers the same command.
+- Formatting changes are applied to the current buffer and persisted when you save.
+
 ## Architecture
 
 ```
@@ -96,7 +104,7 @@ go build -o gomacs .
 ```
 
 No external dependencies. The only imports are the Go standard library packages:
-`fmt`, `os`, `os/signal`, `syscall`, `unicode/utf8`, `path/filepath`, `sort`, `strings`, `unsafe`, `bytes`.
+`bytes`, `fmt`, `go/format`, `os`, `os/signal`, `path/filepath`, `sort`, `strings`, `syscall`, `unicode/utf8`, `unsafe`.
 
 ## Run
 
