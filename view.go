@@ -4,6 +4,47 @@ import "fmt"
 
 const lineNumDigits = 4
 const gutterWidth = lineNumDigits + 1 // digits + 1 space separator
+const tabWidth = 4
+
+func nextTabStop(col int) int {
+	return col + (tabWidth - (col % tabWidth))
+}
+
+func visualColumnForLogical(line []rune, logicalX int) int {
+	if logicalX < 0 {
+		logicalX = 0
+	}
+	if logicalX > len(line) {
+		logicalX = len(line)
+	}
+	visual := 0
+	for i := 0; i < logicalX; i++ {
+		if line[i] == '\t' {
+			visual = nextTabStop(visual)
+		} else {
+			visual++
+		}
+	}
+	return visual
+}
+
+func logicalColumnForVisual(line []rune, visualX int) int {
+	if visualX <= 0 {
+		return 0
+	}
+	visual := 0
+	for i, ch := range line {
+		nextVisual := visual + 1
+		if ch == '\t' {
+			nextVisual = nextTabStop(visual)
+		}
+		if visualX < nextVisual {
+			return i
+		}
+		visual = nextVisual
+	}
+	return len(line)
+}
 
 // layoutSizes computes the widths and content height for the two-panel layout
 func layoutSizes(width, height int) (editorWidth, explorerWidth, contentHeight int) {
@@ -83,11 +124,30 @@ func renderEditor(screen *Screen, editor EditorModel, x0, y0, width, height int,
 			}
 		}
 
-		for col := 0; col < textWidth; col++ {
-			charIdx := editor.ScrollX + col
-			if charIdx < len(line) {
-				screen.Set(textX0+col, y0+row, line[charIdx], hlStyles[charIdx])
+		startVisual := visualColumnForLogical(line, editor.ScrollX)
+		absVisual := startVisual
+		outCol := 0
+		for i := editor.ScrollX; i < len(line) && outCol < textWidth; i++ {
+			ch := line[i]
+			style := DefaultStyle
+			if i < len(hlStyles) {
+				style = hlStyles[i]
 			}
+
+			if ch == '\t' {
+				nextVisual := nextTabStop(absVisual)
+				spaces := nextVisual - absVisual
+				for s := 0; s < spaces && outCol < textWidth; s++ {
+					screen.Set(textX0+outCol, y0+row, ' ', style)
+					outCol++
+				}
+				absVisual = nextVisual
+				continue
+			}
+
+			screen.Set(textX0+outCol, y0+row, ch, style)
+			outCol++
+			absVisual++
 		}
 	}
 }
@@ -203,6 +263,12 @@ func renderStatusBar(screen *Screen, model Model, y int) {
 // CursorPosition returns the screen coordinates for the editor cursor
 func CursorPosition(model Model) (int, int) {
 	buf := model.Buffers[model.BufIdx]
-	return gutterWidth + buf.CursorX - buf.ScrollX,
+	if buf.CursorY < 0 || buf.CursorY >= len(buf.Lines) {
+		return gutterWidth, 0
+	}
+	line := []rune(buf.Lines[buf.CursorY])
+	cursorVisual := visualColumnForLogical(line, buf.CursorX)
+	scrollVisual := visualColumnForLogical(line, buf.ScrollX)
+	return gutterWidth + (cursorVisual - scrollVisual),
 		buf.CursorY - buf.ScrollY
 }

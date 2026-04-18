@@ -166,13 +166,16 @@ func updateMouse(model Model, msg MouseMsg) (Model, Cmd) {
 				textCol = 0
 			}
 			bufY := msg.Y + e.ScrollY
-			bufX := textCol + e.ScrollX
 			if bufY >= len(e.Lines) {
 				bufY = len(e.Lines) - 1
 			}
 			if bufY < 0 {
 				bufY = 0
 			}
+			line := []rune(e.Lines[bufY])
+			scrollVisual := visualColumnForLogical(line, e.ScrollX)
+			targetVisual := scrollVisual + textCol
+			bufX := logicalColumnForVisual(line, targetVisual)
 			lineLen := len([]rune(e.Lines[bufY]))
 			if bufX > lineLen {
 				bufX = lineLen

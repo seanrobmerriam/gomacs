@@ -1,7 +1,9 @@
 package main
 
 import (
+	"io"
 	"os"
+	"syscall"
 	"unicode/utf8"
 )
 
@@ -52,13 +54,68 @@ type KeyEvent struct {
 // Returns a KeyMsg, MouseMsg, or nil if no meaningful event occurred.
 func ReadInput(r *os.File) Msg {
 	var buf [16]byte
-	n, err := r.Read(buf[:])
+	n, err := r.Read(buf[:1])
 	if err != nil || n == 0 {
 		return nil
 	}
-	b := buf[:n]
 
-	if n == 1 {
+	// Escape sequences can arrive split across multiple reads. Drain any bytes
+	// already queued so mouse reports and CSI sequences do not leak into the
+	// buffer as literal characters.
+	if buf[0] == 0x1b {
+		n += readPendingBytes(r, buf[n:])
+
+		// X10 mouse protocol is always 6 bytes total. If we have recognized the
+		// prefix but not the full payload yet, block for the remaining bytes.
+		if n >= 3 && buf[1] == '[' && buf[2] == 'M' && n < 6 {
+			m, err := io.ReadFull(r, buf[n:6])
+			n += m
+			if err != nil && n < 6 {
+				return nil
+			}
+		}
+	}
+
+	// UTF-8 runes may also span multiple bytes.
+	if buf[0] >= 0x80 && buf[0] != 0x1b {
+		n += readPendingBytes(r, buf[n:])
+	}
+
+	return parseInputBytes(buf[:n])
+}
+
+func readPendingBytes(r *os.File, dst []byte) int {
+	if len(dst) == 0 {
+		return 0
+	}
+
+	fd := int(r.Fd())
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		return 0
+	}
+	defer syscall.SetNonblock(fd, false)
+
+	total := 0
+	for total < len(dst) {
+		n, err := r.Read(dst[total:])
+		if n > 0 {
+			total += n
+			continue
+		}
+		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+			break
+		}
+		break
+	}
+	return total
+}
+
+func parseInputBytes(b []byte) Msg {
+	if len(b) == 0 {
+		return nil
+	}
+
+	if len(b) == 1 {
 		ke := parseSingleByte(b[0])
 		if ke.Key == KeyNone {
 			return nil
