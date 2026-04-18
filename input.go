@@ -14,6 +14,7 @@ const (
 	KeyEnter
 	KeyBackspace
 	KeyTab
+	KeyCtrlTab
 	KeyEscape
 	KeyUp
 	KeyDown
@@ -144,6 +145,11 @@ func parseSingleByte(ch byte) KeyEvent {
 }
 
 func parseEscape(b []byte) KeyEvent {
+	// Ctrl+Tab is not standardized across terminals; support common CSI variants.
+	if string(b) == "\x1b[1;5I" || string(b) == "\x1b[27;5;9~" || string(b) == "\x1b[9;5u" {
+		return KeyEvent{Key: KeyCtrlTab}
+	}
+
 	if len(b) < 3 || b[1] != '[' {
 		return KeyEvent{Key: KeyEscape}
 	}

@@ -15,6 +15,7 @@ Runs on Linux, macOS, and FreeBSD.
 - **Undo** — `C-/` or `C-_` steps back through edit history (up to 1000 levels)
 - **Mouse support** — click to position cursor, click explorer entries to open/toggle, scroll wheel to scroll
 - **Status line polish** — shows current language and line ending (`LF`/`CRLF`)
+- **Go formatting on open** — if a Go file appears unformatted, gomacs applies gofmt-style formatting in memory when opening
 - **Double-buffered rendering** — diff-based ANSI updates, no flicker
 - **Live terminal resize** — `SIGWINCH` signal handling, redraws immediately
 - **Raw terminal** — via `syscall` + `ioctl`, no external libraries
@@ -25,10 +26,11 @@ Runs on Linux, macOS, and FreeBSD.
 
 | Key | Action |
 |-----|--------|
-| `Tab` | Switch focus between editor and explorer |
+| `Ctrl+Tab` | Switch focus between editor and explorer |
 | `C-x C-c` | Quit |
 | `C-x C-s` | Save current file |
 | `C-x C-f` | Switch to file explorer (then Enter to open) |
+| `C-x C-m` | Format current Go buffer |
 | `C-x b` | Cycle to next open buffer |
 | `C-x k` | Kill (close) current buffer |
 
@@ -44,6 +46,7 @@ Runs on Linux, macOS, and FreeBSD.
 | `C-s` | Incremental forward search (type to refine, `C-s` next match, `Enter` confirm, `C-g`/`Esc` cancel) |
 | `C-/` or `C-_` | Undo |
 | `Backspace` | Delete character backward |
+| `Tab` | Insert tab character |
 | `Enter` | Insert newline |
 | Arrow keys | Cursor movement |
 | `PgUp` / `PgDn` | Page up / down |

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"go/format"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +75,7 @@ func InitModel(width, height int, dir string) Model {
 		Explorer: NewExplorerModel(dir),
 		Width:    width,
 		Height:   height,
-		Status:   "C-x C-c quit | C-x C-s save | C-x C-f files | Tab switch",
+		Status:   "C-x C-c quit | C-x C-s save | C-x C-f files | C-x C-m format | C-Tab switch",
 	}
 }
 
@@ -99,8 +100,16 @@ func Update(model Model, msg Msg) (Model, Cmd) {
 		return model, nil
 
 	case FileOpenedMsg:
+		lang := DetectLanguage(msg.Filename)
 		lineEnding := detectLineEnding(msg.Content)
 		normalized := normalizeLineEndings(msg.Content)
+		formattedOnOpen := false
+		if lang == LangGo && !hasFormattingHints(normalized) {
+			if formatted, ok := formatGoSource(normalized); ok {
+				normalized = formatted
+				formattedOnOpen = true
+			}
+		}
 		lines := strings.Split(normalized, "\n")
 		if len(lines) == 0 {
 			lines = []string{""}
@@ -118,13 +127,17 @@ func Update(model Model, msg Msg) (Model, Cmd) {
 		newBuf := EditorModel{
 			Lines:      lines,
 			Filename:   msg.Filename,
-			Lang:       DetectLanguage(msg.Filename),
+			Lang:       lang,
 			LineEnding: lineEnding,
 		}
 		model.Buffers = append(model.Buffers, newBuf)
 		model.BufIdx = len(model.Buffers) - 1
 		model.Focus = EditorPanel
-		model.Status = fmt.Sprintf("Opened %s [%d/%d]", filepath.Base(msg.Filename), model.BufIdx+1, len(model.Buffers))
+		if formattedOnOpen {
+			model.Status = fmt.Sprintf("Opened %s [%d/%d] (Go formatted)", filepath.Base(msg.Filename), model.BufIdx+1, len(model.Buffers))
+		} else {
+			model.Status = fmt.Sprintf("Opened %s [%d/%d]", filepath.Base(msg.Filename), model.BufIdx+1, len(model.Buffers))
+		}
 		return model, nil
 
 	case ErrorMsg:
@@ -299,6 +312,45 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 					model.Status = fmt.Sprintf("Killed buffer. Now: %s [%d/%d]", name, model.BufIdx+1, len(model.Buffers))
 				}
 				return model, nil
+			case 'm':
+				e := model.Buffers[model.BufIdx]
+				if e.Lang != LangGo {
+					model.Status = "Format: only Go is supported"
+					return model, nil
+				}
+
+				content := strings.Join(e.Lines, "\n")
+				formatted, ok := formatGoSource(content)
+				if !ok {
+					model.Status = "Format failed"
+					return model, nil
+				}
+				if formatted == content {
+					model.Status = "Already formatted"
+					return model, nil
+				}
+
+				e = e.pushUndo()
+				e.Lines = strings.Split(formatted, "\n")
+				if len(e.Lines) == 0 {
+					e.Lines = []string{""}
+				}
+				if e.CursorY >= len(e.Lines) {
+					e.CursorY = len(e.Lines) - 1
+				}
+				if e.CursorY < 0 {
+					e.CursorY = 0
+				}
+				lineLen := len([]rune(e.Lines[e.CursorY]))
+				if e.CursorX > lineLen {
+					e.CursorX = lineLen
+				}
+				editorW, _, contentH := layoutSizes(model.Width, model.Height)
+				e = e.ScrollToView(contentH, editorW-gutterWidth)
+				e.Modified = true
+				model.Buffers[model.BufIdx] = e
+				model.Status = "Formatted Go buffer"
+				return model, nil
 			}
 			model.Status = "C-x: unknown key"
 			return model, nil
@@ -315,8 +367,8 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 		return model, nil
 	}
 
-	// Tab switches focus between panels
-	if key.Key == KeyTab {
+	// Ctrl+Tab switches focus between panels
+	if key.Key == KeyCtrlTab {
 		if model.Focus == EditorPanel {
 			model.Focus = ExplorerPanel
 		} else {
@@ -347,6 +399,9 @@ func updateEditor(model Model, key KeyEvent) Model {
 	case KeyCtrlSlash:
 		e = e.Undo()
 		model.Status = "Undo"
+	case KeyTab:
+		e = e.pushUndo()
+		e = e.InsertRune('\t')
 	case KeyRune:
 		e = e.pushUndo()
 		e = e.InsertRune(key.Char)
@@ -496,6 +551,28 @@ func detectLineEnding(content string) LineEnding {
 		return LineEndingCRLF
 	}
 	return LineEndingLF
+}
+
+func hasFormattingHints(content string) bool {
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "    ") || strings.Contains(line, "\t") {
+			return true
+		}
+	}
+	return false
+}
+
+func formatGoSource(content string) (string, bool) {
+	formatted, err := format.Source([]byte(content))
+	if err != nil {
+		return content, false
+	}
+	return string(formatted), true
 }
 
 func normalizeLineEndings(content string) string {
