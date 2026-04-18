@@ -3,7 +3,6 @@ package main
 import (
 	"io"
 	"os"
-	"syscall"
 	"unicode/utf8"
 )
 
@@ -53,61 +52,96 @@ type KeyEvent struct {
 // ReadInput reads a single input event from stdin.
 // Returns a KeyMsg, MouseMsg, or nil if no meaningful event occurred.
 func ReadInput(r *os.File) Msg {
-	var buf [16]byte
+	var buf [32]byte
 	n, err := r.Read(buf[:1])
 	if err != nil || n == 0 {
 		return nil
 	}
 
-	// Escape sequences can arrive split across multiple reads. Drain any bytes
-	// already queued so mouse reports and CSI sequences do not leak into the
-	// buffer as literal characters.
 	if buf[0] == 0x1b {
-		n += readPendingBytes(r, buf[n:])
-
-		// X10 mouse protocol is always 6 bytes total. If we have recognized the
-		// prefix but not the full payload yet, block for the remaining bytes.
-		if n >= 3 && buf[1] == '[' && buf[2] == 'M' && n < 6 {
-			m, err := io.ReadFull(r, buf[n:6])
-			n += m
-			if err != nil && n < 6 {
-				return nil
-			}
-		}
+		n = readEscapeSequence(r, buf[:])
+		return parseInputBytes(buf[:n])
 	}
 
 	// UTF-8 runes may also span multiple bytes.
 	if buf[0] >= 0x80 && buf[0] != 0x1b {
-		n += readPendingBytes(r, buf[n:])
+		n += readRuneContinuation(r, buf[n:])
 	}
 
 	return parseInputBytes(buf[:n])
 }
 
-func readPendingBytes(r *os.File, dst []byte) int {
+func readRuneContinuation(r *os.File, dst []byte) int {
 	if len(dst) == 0 {
 		return 0
 	}
 
-	fd := int(r.Fd())
-	if err := syscall.SetNonblock(fd, true); err != nil {
+	n, err := r.Read(dst[:1])
+	if err != nil || n == 0 {
 		return 0
 	}
-	defer syscall.SetNonblock(fd, false)
 
-	total := 0
-	for total < len(dst) {
-		n, err := r.Read(dst[total:])
-		if n > 0 {
-			total += n
-			continue
+	if len(dst) > 1 {
+		m, _ := r.Read(dst[1:])
+		return n + m
+	}
+
+	return n
+}
+
+func readEscapeSequence(r *os.File, dst []byte) int {
+	if len(dst) == 0 {
+		return 0
+	}
+	dst[0] = 0x1b
+	n := 1
+
+	// At minimum, try to read CSI introducer.
+	if n < len(dst) {
+		m, err := io.ReadFull(r, dst[n:n+1])
+		n += m
+		if err != nil {
+			return n
 		}
-		if err == syscall.EAGAIN || err == syscall.EWOULDBLOCK {
+	}
+	if n < 2 || dst[1] != '[' {
+		return n
+	}
+
+	if n < len(dst) {
+		m, err := io.ReadFull(r, dst[n:n+1])
+		n += m
+		if err != nil {
+			return n
+		}
+	}
+
+	// X10 mouse: ESC [ M btn col row
+	if dst[2] == 'M' {
+		need := 6 - n
+		if need > 0 && n+need <= len(dst) {
+			m, err := io.ReadFull(r, dst[n:n+need])
+			n += m
+			if err != nil {
+				return n
+			}
+		}
+		return n
+	}
+
+	// Read the rest of CSI sequence until a final byte (0x40-0x7E).
+	for n < len(dst) {
+		m, err := io.ReadFull(r, dst[n:n+1])
+		n += m
+		if err != nil {
+			return n
+		}
+		if dst[n-1] >= 0x40 && dst[n-1] <= 0x7e {
 			break
 		}
-		break
 	}
-	return total
+
+	return n
 }
 
 func parseInputBytes(b []byte) Msg {
