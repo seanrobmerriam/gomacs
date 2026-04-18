@@ -2,27 +2,84 @@ package main
 
 import "strings"
 
+const maxUndoStack = 1000
+
+// LineEnding tracks which newline sequence a buffer should use when saved.
+type LineEnding int
+
+const (
+	LineEndingLF LineEnding = iota
+	LineEndingCRLF
+)
+
+func (le LineEnding) String() string {
+	if le == LineEndingCRLF {
+		return "CRLF"
+	}
+	return "LF"
+}
+
+// undoSnapshot captures the buffer content and cursor position for undo
+type undoSnapshot struct {
+	Lines   []string
+	CursorX int
+	CursorY int
+}
+
 // EditorModel holds the state for the text editor panel
 type EditorModel struct {
-	Lines    []string
-	CursorX  int // rune position in current line
-	CursorY  int // line number
-	ScrollY  int // first visible line
-	ScrollX  int // first visible column
-	Filename string
-	Modified bool
-	Lang     Language // syntax highlighting language
+	Lines      []string
+	CursorX    int // rune position in current line
+	CursorY    int // line number
+	ScrollY    int // first visible line
+	ScrollX    int // first visible column
+	Filename   string
+	Modified   bool
+	Lang       Language // syntax highlighting language
+	LineEnding LineEnding
+	UndoStack  []undoSnapshot
 }
 
 // NewEditorModel creates an empty editor buffer
 func NewEditorModel() EditorModel {
 	return EditorModel{
-		Lines: []string{""},
+		Lines:      []string{""},
+		LineEnding: LineEndingLF,
 	}
 }
 
 func (e EditorModel) currentLineRunes() []rune {
 	return []rune(e.Lines[e.CursorY])
+}
+
+// pushUndo saves the current buffer+cursor state onto the undo stack
+func (e EditorModel) pushUndo() EditorModel {
+	// Copy lines slice so future edits don't mutate the snapshot
+	linesCopy := make([]string, len(e.Lines))
+	copy(linesCopy, e.Lines)
+	snap := undoSnapshot{Lines: linesCopy, CursorX: e.CursorX, CursorY: e.CursorY}
+	newStack := make([]undoSnapshot, len(e.UndoStack)+1)
+	copy(newStack, e.UndoStack)
+	newStack[len(e.UndoStack)] = snap
+	if len(newStack) > maxUndoStack {
+		newStack = newStack[len(newStack)-maxUndoStack:]
+	}
+	e.UndoStack = newStack
+	return e
+}
+
+// Undo pops the most recent snapshot and restores it
+func (e EditorModel) Undo() EditorModel {
+	if len(e.UndoStack) == 0 {
+		return e
+	}
+	snap := e.UndoStack[len(e.UndoStack)-1]
+	e.UndoStack = e.UndoStack[:len(e.UndoStack)-1]
+	e.Lines = snap.Lines
+	e.CursorX = snap.CursorX
+	e.CursorY = snap.CursorY
+	e.Modified = len(e.UndoStack) > 0
+	return e
 }
 
 func (e EditorModel) clampCursorX() int {
@@ -221,5 +278,9 @@ func (e EditorModel) ScrollToView(height, textWidth int) EditorModel {
 
 // ContentString returns the buffer contents as a single string
 func (e EditorModel) ContentString() string {
-	return strings.Join(e.Lines, "\n")
+	sep := "\n"
+	if e.LineEnding == LineEndingCRLF {
+		sep = "\r\n"
+	}
+	return strings.Join(e.Lines, sep)
 }

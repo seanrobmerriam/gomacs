@@ -12,6 +12,23 @@ const (
 	LangShell                  // .sh .bash .zsh .fish
 )
 
+func LanguageName(lang Language) string {
+	switch lang {
+	case LangGo:
+		return "Go"
+	case LangC:
+		return "C/C++"
+	case LangPython:
+		return "Python"
+	case LangJS:
+		return "JS/TS"
+	case LangShell:
+		return "Shell"
+	default:
+		return "Plain"
+	}
+}
+
 // token style palette — read-only after init
 var (
 	styleKeyword = Style{FG: ColorBlue, Bold: true}

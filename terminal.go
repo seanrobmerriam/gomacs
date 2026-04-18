@@ -78,3 +78,13 @@ func enterAltScreen(out *os.File) {
 func exitAltScreen(out *os.File) {
 	fmt.Fprint(out, "\x1b[?1049l")
 }
+
+// enableMouseReporting enables X10 mouse click and scroll reporting
+func enableMouseReporting(out *os.File) {
+	fmt.Fprint(out, "\x1b[?1000h")
+}
+
+// disableMouseReporting disables mouse reporting
+func disableMouseReporting(out *os.File) {
+	fmt.Fprint(out, "\x1b[?1000l")
+}

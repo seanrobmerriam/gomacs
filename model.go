@@ -38,11 +38,21 @@ type FileOpenedMsg struct {
 // ErrorMsg signals that a side effect failed
 type ErrorMsg struct{ Err error }
 
+// MouseMsg signals a mouse click or scroll event.
+// Btn: 0=left click, 64=scroll up, 65=scroll down.
+// X, Y are 0-based screen coordinates.
+type MouseMsg struct {
+	Btn int
+	X   int
+	Y   int
+}
+
 // --- Model ---
 
 // Model is the complete application state
 type Model struct {
-	Editor        EditorModel
+	Buffers       []EditorModel
+	BufIdx        int
 	Explorer      ExplorerModel
 	Focus         Panel
 	Width         int
@@ -59,7 +69,8 @@ type Model struct {
 // InitModel creates the initial application state
 func InitModel(width, height int, dir string) Model {
 	return Model{
-		Editor:   NewEditorModel(),
+		Buffers:  []EditorModel{NewEditorModel()},
+		BufIdx:   0,
 		Explorer: NewExplorerModel(dir),
 		Width:    width,
 		Height:   height,
@@ -77,27 +88,144 @@ func Update(model Model, msg Msg) (Model, Cmd) {
 		return updateKey(model, msg.KeyEvent)
 
 	case FileSavedMsg:
-		model.Editor.Modified = false
+		// Find the buffer with this filename and clear its modified flag
+		for i := range model.Buffers {
+			if model.Buffers[i].Filename == msg.Filename {
+				model.Buffers[i].Modified = false
+				break
+			}
+		}
 		model.Status = fmt.Sprintf("Saved %s", filepath.Base(msg.Filename))
 		return model, nil
 
 	case FileOpenedMsg:
-		lines := strings.Split(msg.Content, "\n")
+		lineEnding := detectLineEnding(msg.Content)
+		normalized := normalizeLineEndings(msg.Content)
+		lines := strings.Split(normalized, "\n")
 		if len(lines) == 0 {
 			lines = []string{""}
 		}
-		model.Editor = EditorModel{
-			Lines:    lines,
-			Filename: msg.Filename,
-			Lang:     DetectLanguage(msg.Filename),
+		// If this file is already open in a buffer, switch to it
+		for i, buf := range model.Buffers {
+			if buf.Filename == msg.Filename {
+				model.BufIdx = i
+				model.Focus = EditorPanel
+				model.Status = fmt.Sprintf("Switched to %s", filepath.Base(msg.Filename))
+				return model, nil
+			}
 		}
+		// Otherwise open as a new buffer
+		newBuf := EditorModel{
+			Lines:      lines,
+			Filename:   msg.Filename,
+			Lang:       DetectLanguage(msg.Filename),
+			LineEnding: lineEnding,
+		}
+		model.Buffers = append(model.Buffers, newBuf)
+		model.BufIdx = len(model.Buffers) - 1
 		model.Focus = EditorPanel
-		model.Status = fmt.Sprintf("Opened %s", filepath.Base(msg.Filename))
+		model.Status = fmt.Sprintf("Opened %s [%d/%d]", filepath.Base(msg.Filename), model.BufIdx+1, len(model.Buffers))
 		return model, nil
 
 	case ErrorMsg:
 		model.Status = fmt.Sprintf("Error: %v", msg.Err)
 		return model, nil
+
+	case MouseMsg:
+		return updateMouse(model, msg)
+	}
+	return model, nil
+}
+
+func updateMouse(model Model, msg MouseMsg) (Model, Cmd) {
+	editorW, _, contentH := layoutSizes(model.Width, model.Height)
+	dividerX := editorW
+	explorerHeight := model.Height - 2 // -1 status bar, -1 explorer header
+
+	switch msg.Btn {
+	case 0: // left click
+		if msg.X < dividerX {
+			// Click in editor panel
+			model.Focus = EditorPanel
+			e := model.Buffers[model.BufIdx]
+			textCol := msg.X - gutterWidth
+			if textCol < 0 {
+				textCol = 0
+			}
+			bufY := msg.Y + e.ScrollY
+			bufX := textCol + e.ScrollX
+			if bufY >= len(e.Lines) {
+				bufY = len(e.Lines) - 1
+			}
+			if bufY < 0 {
+				bufY = 0
+			}
+			lineLen := len([]rune(e.Lines[bufY]))
+			if bufX > lineLen {
+				bufX = lineLen
+			}
+			if bufX < 0 {
+				bufX = 0
+			}
+			e.CursorY = bufY
+			e.CursorX = bufX
+			model.Buffers[model.BufIdx] = e
+		} else if msg.X > dividerX {
+			// Click in explorer panel — row 0 is "Files" header
+			model.Focus = ExplorerPanel
+			if msg.Y >= 1 {
+				entryIdx := msg.Y - 1 + model.Explorer.ScrollY
+				if entryIdx >= 0 && entryIdx < len(model.Explorer.Entries) {
+					model.Explorer.Selected = entryIdx
+					entry := model.Explorer.SelectedEntry()
+					if entry != nil {
+						if entry.IsDir {
+							model.Explorer = model.Explorer.Toggle()
+						} else {
+							path := entry.Path
+							name := entry.Name
+							model.Status = fmt.Sprintf("Opening %s...", name)
+							return model, func() Msg {
+								data, err := os.ReadFile(path)
+								if err != nil {
+									return ErrorMsg{err}
+								}
+								return FileOpenedMsg{path, string(data)}
+							}
+						}
+					}
+				}
+			}
+			if explorerHeight > 0 {
+				model.Explorer = model.Explorer.ScrollToView(explorerHeight)
+			}
+		}
+	case 64: // scroll wheel up — 3 lines
+		if model.Focus == EditorPanel {
+			e := model.Buffers[model.BufIdx]
+			for i := 0; i < 3; i++ {
+				e = e.MoveUp()
+			}
+			e = e.ScrollToView(contentH, editorW-gutterWidth)
+			model.Buffers[model.BufIdx] = e
+		} else {
+			for i := 0; i < 3; i++ {
+				model.Explorer = model.Explorer.MoveUp()
+			}
+		}
+	case 65: // scroll wheel down — 3 lines
+		if model.Focus == EditorPanel {
+			e := model.Buffers[model.BufIdx]
+			for i := 0; i < 3; i++ {
+				e = e.MoveDown()
+			}
+			e = e.ScrollToView(contentH, editorW-gutterWidth)
+			model.Buffers[model.BufIdx] = e
+		} else {
+			for i := 0; i < 3; i++ {
+				model.Explorer = model.Explorer.MoveDown()
+			}
+		}
 	}
 	return model, nil
 }
@@ -116,13 +244,13 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 			model.Quit = true
 			return model, nil
 		case KeyCtrlS:
-			if model.Editor.Filename == "" {
+			if model.Buffers[model.BufIdx].Filename == "" {
 				model.Status = "No filename (open a file first)"
 				return model, nil
 			}
 			model.Status = "Saving..."
-			content := model.Editor.ContentString()
-			filename := model.Editor.Filename
+			content := model.Buffers[model.BufIdx].ContentString()
+			filename := model.Buffers[model.BufIdx].Filename
 			return model, func() Msg {
 				if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
 					return ErrorMsg{err}
@@ -132,6 +260,47 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 		case KeyCtrlF:
 			model.Focus = ExplorerPanel
 			model.Status = "Select a file and press Enter"
+			return model, nil
+		case KeyRune:
+			switch key.Char {
+			case 'b':
+				// Cycle to next buffer
+				if len(model.Buffers) > 1 {
+					model.BufIdx = (model.BufIdx + 1) % len(model.Buffers)
+					model.Focus = EditorPanel
+					name := model.Buffers[model.BufIdx].Filename
+					if name == "" {
+						name = "[scratch]"
+					} else {
+						name = filepath.Base(name)
+					}
+					model.Status = fmt.Sprintf("Buffer: %s [%d/%d]", name, model.BufIdx+1, len(model.Buffers))
+				} else {
+					model.Status = "No other buffers"
+				}
+				return model, nil
+			case 'k':
+				// Kill current buffer
+				if len(model.Buffers) == 1 {
+					// Replace with empty scratch rather than leaving 0 buffers
+					model.Buffers[0] = NewEditorModel()
+					model.Status = "Buffer cleared"
+				} else {
+					model.Buffers = append(model.Buffers[:model.BufIdx], model.Buffers[model.BufIdx+1:]...)
+					if model.BufIdx >= len(model.Buffers) {
+						model.BufIdx = len(model.Buffers) - 1
+					}
+					name := model.Buffers[model.BufIdx].Filename
+					if name == "" {
+						name = "[scratch]"
+					} else {
+						name = filepath.Base(name)
+					}
+					model.Status = fmt.Sprintf("Killed buffer. Now: %s [%d/%d]", name, model.BufIdx+1, len(model.Buffers))
+				}
+				return model, nil
+			}
+			model.Status = "C-x: unknown key"
 			return model, nil
 		default:
 			model.Status = "C-x: unknown key"
@@ -170,20 +339,28 @@ func updateKey(model Model, key KeyEvent) (Model, Cmd) {
 }
 
 func updateEditor(model Model, key KeyEvent) Model {
-	e := model.Editor
+	e := model.Buffers[model.BufIdx]
 	editorW, _, contentH := layoutSizes(model.Width, model.Height)
 	textWidth := editorW - gutterWidth
 
 	switch key.Key {
+	case KeyCtrlSlash:
+		e = e.Undo()
+		model.Status = "Undo"
 	case KeyRune:
+		e = e.pushUndo()
 		e = e.InsertRune(key.Char)
 	case KeyEnter:
+		e = e.pushUndo()
 		e = e.InsertNewline()
 	case KeyBackspace:
+		e = e.pushUndo()
 		e = e.DeleteBackward()
 	case KeyDelete, KeyCtrlD:
+		e = e.pushUndo()
 		e = e.DeleteForward()
 	case KeyCtrlK:
+		e = e.pushUndo()
 		e = e.KillLine()
 	case KeyUp, KeyCtrlP:
 		e = e.MoveUp()
@@ -208,7 +385,7 @@ func updateEditor(model Model, key KeyEvent) Model {
 	}
 
 	e = e.ScrollToView(contentH, textWidth)
-	model.Editor = e
+	model.Buffers[model.BufIdx] = e
 	return model
 }
 
@@ -216,8 +393,8 @@ func updateEditor(model Model, key KeyEvent) Model {
 func enterSearch(model Model) Model {
 	model.SearchMode = true
 	model.SearchQuery = ""
-	model.SearchOriginY = model.Editor.CursorY
-	model.SearchOriginX = model.Editor.CursorX
+	model.SearchOriginY = model.Buffers[model.BufIdx].CursorY
+	model.SearchOriginX = model.Buffers[model.BufIdx].CursorX
 	model.Status = "I-search: "
 	return model
 }
@@ -228,12 +405,13 @@ func updateSearch(model Model, key KeyEvent) (Model, Cmd) {
 	case KeyEscape, KeyCtrlG:
 		// Cancel: restore cursor to where search began
 		model.SearchMode = false
-		model.Editor.CursorY = model.SearchOriginY
-		model.Editor.CursorX = model.SearchOriginX
+		e := model.Buffers[model.BufIdx]
+		e.CursorY = model.SearchOriginY
+		e.CursorX = model.SearchOriginX
 		model.SearchQuery = ""
-		_, _, contentH := layoutSizes(model.Width, model.Height)
-		editorW, _, _ := layoutSizes(model.Width, model.Height)
-		model.Editor = model.Editor.ScrollToView(contentH, editorW-gutterWidth)
+		editorW, _, contentH := layoutSizes(model.Width, model.Height)
+		e = e.ScrollToView(contentH, editorW-gutterWidth)
+		model.Buffers[model.BufIdx] = e
 		model.Status = "Search cancelled"
 		return model, nil
 	case KeyEnter:
@@ -248,7 +426,7 @@ func updateSearch(model Model, key KeyEvent) (Model, Cmd) {
 		return model, nil
 	case KeyCtrlS:
 		// Advance to next match
-		model = searchFrom(model, model.Editor.CursorY, model.Editor.CursorX+1)
+		model = searchFrom(model, model.Buffers[model.BufIdx].CursorY, model.Buffers[model.BufIdx].CursorX+1)
 		return model, nil
 	case KeyBackspace:
 		q := []rune(model.SearchQuery)
@@ -269,16 +447,18 @@ func updateSearch(model Model, key KeyEvent) (Model, Cmd) {
 // It moves the editor cursor to the first match and updates the status line.
 func searchFrom(model Model, startY, startX int) Model {
 	q := []rune(model.SearchQuery)
+	e := model.Buffers[model.BufIdx]
 	if len(q) == 0 {
-		model.Editor.CursorY = model.SearchOriginY
-		model.Editor.CursorX = model.SearchOriginX
+		e.CursorY = model.SearchOriginY
+		e.CursorX = model.SearchOriginX
+		model.Buffers[model.BufIdx] = e
 		model.Status = "I-search: "
 		return model
 	}
-	nLines := len(model.Editor.Lines)
+	nLines := len(e.Lines)
 	for dy := 0; dy < nLines; dy++ {
 		lineIdx := (startY + dy) % nLines
-		line := []rune(model.Editor.Lines[lineIdx])
+		line := []rune(e.Lines[lineIdx])
 		startCol := 0
 		if dy == 0 {
 			startCol = startX
@@ -288,10 +468,11 @@ func searchFrom(model Model, startY, startX int) Model {
 		}
 		for col := startCol; col+len(q) <= len(line); col++ {
 			if runesMatch(line[col:col+len(q)], q) {
-				model.Editor.CursorY = lineIdx
-				model.Editor.CursorX = col
+				e.CursorY = lineIdx
+				e.CursorX = col
 				editorW, _, contentH := layoutSizes(model.Width, model.Height)
-				model.Editor = model.Editor.ScrollToView(contentH, editorW-gutterWidth)
+				e = e.ScrollToView(contentH, editorW-gutterWidth)
+				model.Buffers[model.BufIdx] = e
 				model.Status = fmt.Sprintf("I-search: %s", model.SearchQuery)
 				return model
 			}
@@ -308,6 +489,18 @@ func runesMatch(a, b []rune) bool {
 		}
 	}
 	return true
+}
+
+func detectLineEnding(content string) LineEnding {
+	if strings.Contains(content, "\r\n") {
+		return LineEndingCRLF
+	}
+	return LineEndingLF
+}
+
+func normalizeLineEndings(content string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	return strings.ReplaceAll(content, "\r", "\n")
 }
 
 func updateExplorer(model Model, key KeyEvent) (Model, Cmd) {

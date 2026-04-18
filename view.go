@@ -33,7 +33,7 @@ func View(model Model, screen *Screen) {
 	editorW, explorerW, contentH := layoutSizes(model.Width, model.Height)
 
 	// Editor panel (left)
-	renderEditor(screen, model.Editor, 0, 0, editorW, contentH, model.Focus == EditorPanel, model.SearchMode, model.SearchQuery)
+	renderEditor(screen, model.Buffers[model.BufIdx], 0, 0, editorW, contentH, model.Focus == EditorPanel, model.SearchMode, model.SearchQuery)
 
 	// Vertical divider
 	dividerX := editorW
@@ -166,20 +166,31 @@ func renderStatusBar(screen *Screen, model Model, y int) {
 		screen.Set(x, y, ' ', style)
 	}
 
-	// Left: filename and modified indicator
-	filename := model.Editor.Filename
+	// Left: filename, buffer index, and modified indicator
+	buf := model.Buffers[model.BufIdx]
+	filename := buf.Filename
 	if filename == "" {
 		filename = "[scratch]"
 	}
 	mod := ""
-	if model.Editor.Modified {
+	if buf.Modified {
 		mod = " [modified]"
 	}
-	left := fmt.Sprintf(" %s%s", filename, mod)
+	bufIndicator := ""
+	if len(model.Buffers) > 1 {
+		bufIndicator = fmt.Sprintf(" [%d/%d]", model.BufIdx+1, len(model.Buffers))
+	}
+	left := fmt.Sprintf(" %s%s%s", filename, bufIndicator, mod)
 	screen.SetString(0, y, left, style)
 
-	// Right: cursor position and status message
-	right := fmt.Sprintf("L%d:C%d  %s ", model.Editor.CursorY+1, model.Editor.CursorX+1, model.Status)
+	// Right: cursor position, language, line endings, and status message
+	right := fmt.Sprintf("L%d:C%d  %s %s  %s ",
+		buf.CursorY+1,
+		buf.CursorX+1,
+		LanguageName(buf.Lang),
+		buf.LineEnding.String(),
+		model.Status,
+	)
 	rightRunes := []rune(right)
 	leftRunes := []rune(left)
 	rightX := model.Width - len(rightRunes)
@@ -191,6 +202,7 @@ func renderStatusBar(screen *Screen, model Model, y int) {
 
 // CursorPosition returns the screen coordinates for the editor cursor
 func CursorPosition(model Model) (int, int) {
-	return gutterWidth + model.Editor.CursorX - model.Editor.ScrollX,
-		model.Editor.CursorY - model.Editor.ScrollY
+	buf := model.Buffers[model.BufIdx]
+	return gutterWidth + buf.CursorX - buf.ScrollX,
+		buf.CursorY - buf.ScrollY
 }

@@ -38,6 +38,7 @@ const (
 	KeyCtrlS
 	KeyCtrlV
 	KeyCtrlX
+	KeyCtrlSlash // C-/ or C-_
 )
 
 // KeyEvent represents a single key press
@@ -46,31 +47,53 @@ type KeyEvent struct {
 	Char rune
 }
 
-// ReadKey reads a single key event from the given file (stdin)
-func ReadKey(r *os.File) KeyEvent {
+// ReadInput reads a single input event from stdin.
+// Returns a KeyMsg, MouseMsg, or nil if no meaningful event occurred.
+func ReadInput(r *os.File) Msg {
 	var buf [16]byte
 	n, err := r.Read(buf[:])
 	if err != nil || n == 0 {
-		return KeyEvent{Key: KeyNone}
+		return nil
 	}
 	b := buf[:n]
 
 	if n == 1 {
-		return parseSingleByte(b[0])
+		ke := parseSingleByte(b[0])
+		if ke.Key == KeyNone {
+			return nil
+		}
+		return KeyMsg{ke}
 	}
 
 	// Escape sequences
 	if b[0] == 0x1b {
-		return parseEscape(b)
+		// X10 mouse protocol: ESC [ M <btn+32> <col+33> <row+33>
+		if len(b) >= 6 && b[1] == '[' && b[2] == 'M' {
+			btn := int(b[3]) - 32
+			x := int(b[4]) - 33
+			y := int(b[5]) - 33
+			if x < 0 {
+				x = 0
+			}
+			if y < 0 {
+				y = 0
+			}
+			return MouseMsg{Btn: btn, X: x, Y: y}
+		}
+		ke := parseEscape(b)
+		if ke.Key == KeyNone {
+			return nil
+		}
+		return KeyMsg{ke}
 	}
 
 	// UTF-8 multi-byte character
 	r2, _ := utf8.DecodeRune(b)
 	if r2 != utf8.RuneError {
-		return KeyEvent{Key: KeyRune, Char: r2}
+		return KeyMsg{KeyEvent{Key: KeyRune, Char: r2}}
 	}
 
-	return KeyEvent{Key: KeyNone}
+	return nil
 }
 
 func parseSingleByte(ch byte) KeyEvent {
@@ -103,6 +126,8 @@ func parseSingleByte(ch byte) KeyEvent {
 		return KeyEvent{Key: KeyCtrlV}
 	case ch == 0x18:
 		return KeyEvent{Key: KeyCtrlX}
+	case ch == 0x1f:
+		return KeyEvent{Key: KeyCtrlSlash}
 	case ch == 0x0d || ch == 0x0a:
 		return KeyEvent{Key: KeyEnter}
 	case ch == 0x09:

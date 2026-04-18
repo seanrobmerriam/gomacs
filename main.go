@@ -30,6 +30,10 @@ func main() {
 	defer exitAltScreen(os.Stdout)
 	defer fmt.Fprint(os.Stdout, "\x1b[?25h") // ensure cursor is visible on exit
 
+	// Enable mouse reporting (X10 protocol: clicks + scroll wheel)
+	enableMouseReporting(os.Stdout)
+	defer disableMouseReporting(os.Stdout)
+
 	// Listen for terminal resize signals
 	sigwinchCh := make(chan os.Signal, 1)
 	signal.Notify(sigwinchCh, syscall.SIGWINCH)
@@ -82,14 +86,14 @@ func main() {
 		prevScreen = screen
 
 		// Read input → message
-		key := ReadKey(os.Stdin)
-		if key.Key == KeyNone {
+		msg := ReadInput(os.Stdin)
+		if msg == nil {
 			continue
 		}
 
 		// Update: (model, msg) → (model, cmd)
 		var cmd Cmd
-		model, cmd = Update(model, KeyMsg{key})
+		model, cmd = Update(model, msg)
 
 		// Execute command chain (Elm runtime)
 		for cmd != nil {
