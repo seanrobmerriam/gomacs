@@ -1,3 +1,5 @@
+<img width="1816" height="795" alt="Screenshot 2026-04-20 at 7 59 27 PM" src="https://github.com/user-attachments/assets/94729d07-f4ba-4884-a1c4-6c6ac746f3dd" />
+
 # gomacs
 
 A native TUI text editor written in Go, built on the [Elm architecture](https://guide.elm-lang.org/architecture/) with zero external dependencies.
